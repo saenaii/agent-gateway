@@ -1,0 +1,32 @@
+syntax = "proto3";
+
+package gateway;
+
+option go_package = "agent-gateway/internal/api/pb;pb";
+
+// Message is one chat message.
+message Message {
+  string role = 1;
+  string content = 2;
+}
+
+// ChatRequest is a gRPC chat completion request.
+message ChatRequest {
+  string model = 1;
+  repeated Message messages = 2;
+}
+
+// ChatResponse is the gateway reply with routing metadata.
+message ChatResponse {
+  string id = 1;
+  string intent = 2;
+  int32 layer = 3;
+  string content = 4;
+  int64 prompt_tokens = 5;
+  int64 completion_tokens = 6;
+}
+
+// Gateway is the internal high-throughput routing service.
+service Gateway {
+  rpc Chat(ChatRequest) returns (ChatResponse);
+}

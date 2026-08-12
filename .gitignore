@@ -1,0 +1,19 @@
+# Local configuration (copy from config.example.yaml / .env.example)
+config.yaml
+.env
+
+# Binaries and build artifacts
+/bin/
+/dist/
+*.exe
+
+# Go
+*.test
+*.out
+coverage.txt
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+bin/

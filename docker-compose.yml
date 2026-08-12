@@ -1,0 +1,33 @@
+services:
+  gateway:
+    build: .
+    ports:
+      - "8080:8080"
+      - "9090:9090"
+    environment:
+      OLLAMA_BASE_URL: "${OLLAMA_BASE_URL:-http://ollama:11434}"
+      OLLAMA_MODEL: "${OLLAMA_MODEL:-qwen2.5:0.5b}"
+    restart: unless-stopped
+
+  ollama:
+    image: ollama/ollama:latest
+    profiles: ["full"]
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        ollama serve &
+        sleep 3
+        ollama pull qwen2.5:0.5b
+        wait
+
+volumes:
+  ollama_data:

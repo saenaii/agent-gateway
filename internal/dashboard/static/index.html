@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Agent Gateway Dashboard</title>
+  <script src="vendor/tailwind.min.js"></script>
+  <script src="vendor/chart.umd.min.js"></script>
+</head>
+<body class="bg-gray-950 text-gray-100 min-h-screen">
+  <header class="border-b border-gray-800 px-6 py-4">
+    <h1 class="text-xl font-semibold">Agent Gateway</h1>
+    <p class="text-sm text-gray-400">2-Layer Semantic Routing &middot; Observability</p>
+  </header>
+
+  <main class="p-6 grid gap-6">
+    <section id="stat-cards" class="grid grid-cols-2 md:grid-cols-4 gap-4"></section>
+
+    <section class="grid md:grid-cols-2 gap-6">
+      <div class="bg-gray-900 rounded-lg p-4 border border-gray-800">
+        <h2 class="text-sm font-medium text-gray-300 mb-2">Traffic Split (Layer 1 vs Layer 2)</h2>
+        <div class="h-64"><canvas id="traffic-chart"></canvas></div>
+      </div>
+      <div class="bg-gray-900 rounded-lg p-4 border border-gray-800">
+        <h2 class="text-sm font-medium text-gray-300 mb-2">Token Usage Over Time</h2>
+        <div class="h-64"><canvas id="tokens-chart"></canvas></div>
+      </div>
+    </section>
+
+    <section class="bg-gray-900 rounded-lg p-4 border border-gray-800">
+      <h2 class="text-sm font-medium text-gray-300 mb-2">Live Request Log</h2>
+      <div class="overflow-x-auto max-h-96 overflow-y-auto">
+        <table class="w-full text-sm">
+          <thead class="text-left text-gray-400 border-b border-gray-800">
+            <tr>
+              <th class="py-2 pr-4">ID</th>
+              <th class="py-2 pr-4">Time</th>
+              <th class="py-2 pr-4">Intent</th>
+              <th class="py-2 pr-4">Layer</th>
+              <th class="py-2 pr-4">Status</th>
+              <th class="py-2 pr-4">TTFT (ms)</th>
+              <th class="py-2 pr-4">Duration (ms)</th>
+            </tr>
+          </thead>
+          <tbody id="request-rows"></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const trafficChart = new Chart(document.getElementById('traffic-chart'), {
+      type: 'doughnut',
+      data: {
+        labels: ['Layer 1 (Local Offload)', 'Layer 2 (Escalated)'],
+        datasets: [{ data: [0, 0], backgroundColor: ['#22c55e', '#f59e0b'] }]
+      }
+    });
+
+    const tokensChart = new Chart(document.getElementById('tokens-chart'), {
+      type: 'line',
+      data: {
+        labels: [],
+        datasets: [
+          { label: 'Prompt', data: [], borderColor: '#3b82f6', fill: false },
+          { label: 'Completion', data: [], borderColor: '#a855f7', fill: false }
+        ]
+      },
+      options: { scales: { y: { beginAtZero: true } } }
+    });
+
+    const tokenSeries = [];
+
+    function fmt(v) { return v == null ? '-' : Number(v).toFixed(1); }
+
+    function renderStats(m) {
+      document.getElementById('stat-cards').innerHTML = [
+        ['Total Requests', m.total_requests],
+        ['Offload Ratio (L1)', (m.offload_ratio * 100).toFixed(1) + '%'],
+        ['Escalation Ratio (L2)', (m.escalation_ratio * 100).toFixed(1) + '%'],
+        ['Total Tokens', m.total_tokens],
+        ['L1 Tokens', m.layer1_tokens],
+        ['TTFT P99', fmt(m.ttft_p99_ms) + ' ms'],
+        ['Duration P99', fmt(m.duration_p99_ms) + ' ms'],
+        ['TTFT Avg', fmt((m.ttft_p50_ms + m.ttft_p99_ms) / 2) + ' ms']
+      ].map(([label, value]) => `
+        <div class="bg-gray-900 rounded-lg p-4 border border-gray-800">
+          <div class="text-xs text-gray-400">${label}</div>
+          <div class="text-2xl font-semibold mt-1">${value}</div>
+        </div>`).join('');
+    }
+
+    function renderTraffic(m) {
+      trafficChart.data.datasets[0].data = [m.layer1_offload, m.layer2_escalation];
+      trafficChart.update();
+    }
+
+    function renderTokens(m) {
+      const t = new Date().toLocaleTimeString();
+      tokenSeries.push({ t, p: m.total_prompt_tokens, c: m.total_completion_tokens });
+      if (tokenSeries.length > 30) tokenSeries.shift();
+      tokensChart.data.labels = tokenSeries.map(x => x.t);
+      tokensChart.data.datasets[0].data = tokenSeries.map(x => x.p);
+      tokensChart.data.datasets[1].data = tokenSeries.map(x => x.c);
+      tokensChart.update();
+    }
+
+    function renderRequests(m) {
+      const rows = m.requests.slice().reverse().map(r => `
+        <tr class="border-b border-gray-800/50">
+          <td class="py-2 pr-4 font-mono text-xs">${r.id}</td>
+          <td class="py-2 pr-4">${r.time}</td>
+          <td class="py-2 pr-4">${r.intent}</td>
+          <td class="py-2 pr-4">
+            <span class="px-2 py-0.5 rounded text-xs ${r.layer === 1 ? 'bg-green-900 text-green-300' : 'bg-amber-900 text-amber-300'}">L${r.layer}</span>
+          </td>
+          <td class="py-2 pr-4">${r.status}</td>
+          <td class="py-2 pr-4">${fmt(r.ttft_ms)}</td>
+          <td class="py-2 pr-4">${fmt(r.duration_ms)}</td>
+        </tr>`).join('');
+      document.getElementById('request-rows').innerHTML = rows;
+    }
+
+    async function refresh() {
+      try {
+        const res = await fetch('/metrics');
+        const m = await res.json();
+        renderStats(m);
+        renderTraffic(m);
+        renderTokens(m);
+        renderRequests(m);
+      } catch (e) { /* gateway not ready yet */ }
+    }
+
+    refresh();
+    setInterval(refresh, 2000);
+  </script>
+</body>
+</html>
