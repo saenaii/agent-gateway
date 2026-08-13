@@ -1,11 +1,16 @@
 services:
   gateway:
-    build: .
+    build:
+      context: .
+      args:
+        HTTP_PROXY: ${HTTP_PROXY:-}
+        HTTPS_PROXY: ${HTTPS_PROXY:-}
+        NO_PROXY: ${NO_PROXY:-}
     ports:
       - "8080:8080"
       - "9090:9090"
     environment:
-      OLLAMA_BASE_URL: "${OLLAMA_BASE_URL:-http://ollama:11434}"
+      OLLAMA_BASE_URL: "${COMPOSE_OLLAMA_URL:-http://ollama:11434}"
       OLLAMA_MODEL: "${OLLAMA_MODEL:-qwen2.5:0.5b}"
     restart: unless-stopped
 
@@ -14,6 +19,8 @@ services:
     profiles: ["full"]
     ports:
       - "11434:11434"
+    environment:
+      OLLAMA_MODEL: "${OLLAMA_MODEL:-qwen2.5:0.5b}"
     volumes:
       - ollama_data:/root/.ollama
     healthcheck:
@@ -26,7 +33,7 @@ services:
       - |
         ollama serve &
         sleep 3
-        ollama pull qwen2.5:0.5b
+        ollama pull ${OLLAMA_MODEL:-qwen2.5:0.5b}
         wait
 
 volumes:
