@@ -15,6 +15,19 @@ ollama:
   # Keep 0.5m close to zero so the sample is meaningful:
   retry_attempts: 1
 
+# Layer 2: online LLM backends for escalated (complex) intents.
+# New providers (openai, bedrock, ...) plug in behind the same interface;
+# add an entry here and implement the type in internal/layer2.
+layer2:
+  default_provider: "opencode"   # escalated prompts route here by default
+  request_timeout: 60s           # per upstream call budget
+  retry_attempts: 1              # retries after the first attempt
+  providers:
+    opencode:                    # opencode serve instance
+      type: "opencode"           # backend implementation
+      base_url: "http://localhost:4096"
+      model: "opencode/deepseek-v4-flash-free" # providerID/modelID
+
 worker_pool:
   size: 16          # concurrent Layer 1 classify jobs
   queue_size: 256   # pending job queue

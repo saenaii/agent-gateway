@@ -5,11 +5,13 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -18,6 +20,7 @@ import (
 	"agent-gateway/internal/breaker"
 	"agent-gateway/internal/config"
 	"agent-gateway/internal/intent"
+	"agent-gateway/internal/layer2"
 	"agent-gateway/internal/metrics"
 	"agent-gateway/internal/pool"
 	"agent-gateway/internal/upstream"
@@ -46,8 +49,14 @@ func run(logger *slog.Logger) error {
 	ollama := upstream.NewClient(cfg.Ollama.BaseURL, cfg.Ollama.RequestTimeout.Duration)
 	classifier := intent.NewClassifier(ollama, cfg.Ollama.Model, cfg.Ollama.RetryAttempts, breaker, workerPool)
 
+	layer2Router, err := buildLayer2Router(cfg)
+	if err != nil {
+		return err
+	}
+
 	gateway := &api.Gateway{
 		Classifier:      classifier,
+		Layer2:          layer2Router,
 		Metrics:         collector,
 		Dashboard:       cfg.Dashboard.Enabled,
 		ClassifyTimeout: classifyBudget(cfg),
@@ -62,7 +71,7 @@ func run(logger *slog.Logger) error {
 	}
 
 	grpcServer := grpc.NewServer()
-	pb.RegisterGatewayServer(grpcServer, api.NewGRPCServer(classifier, collector, classifyBudget(cfg)))
+	pb.RegisterGatewayServer(grpcServer, api.NewGRPCServer(classifier, collector, layer2Router, classifyBudget(cfg)))
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -82,6 +91,7 @@ func run(logger *slog.Logger) error {
 		"grpc", cfg.Server.GRPCAddr,
 		"ollama", cfg.Ollama.BaseURL,
 		"model", cfg.Ollama.Model,
+		"layer2", cfg.Layer2.DefaultProvider,
 	)
 
 	select {
@@ -106,4 +116,32 @@ func run(logger *slog.Logger) error {
 // models do not get cut off mid-retry.
 func classifyBudget(cfg *config.Config) time.Duration {
 	return cfg.Ollama.RequestTimeout.Duration*time.Duration(cfg.Ollama.RetryAttempts+1) + 5*time.Second
+}
+
+// buildLayer2Router constructs a provider per layer2.providers entry. Unknown
+// provider types fail fast so misconfiguration is obvious at startup.
+func buildLayer2Router(cfg *config.Config) (*layer2.Router, error) {
+	router := layer2.NewRouter(
+		cfg.Layer2.DefaultProvider,
+		cfg.Layer2.RetryAttempts,
+		cfg.CircuitBreaker.FailureThreshold,
+		cfg.CircuitBreaker.Cooldown.Duration,
+	)
+	for name, pc := range cfg.Layer2.Providers {
+		switch strings.ToLower(pc.Type) {
+		case "opencode":
+			provider, err := layer2.NewOpenCode(layer2.OpenCodeConfig{
+				BaseURL: pc.BaseURL,
+				Model:   pc.Model,
+				Timeout: cfg.Layer2.RequestTimeout.Duration,
+			})
+			if err != nil {
+				return nil, fmt.Errorf("layer2 provider %q: %w", name, err)
+			}
+			router.Add(name, provider)
+		default:
+			return nil, fmt.Errorf("layer2 provider %q: unsupported type %q (supported: opencode)", name, pc.Type)
+		}
+	}
+	return router, nil
 }

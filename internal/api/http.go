@@ -14,6 +14,7 @@ import (
 
 	"agent-gateway/internal/dashboard"
 	"agent-gateway/internal/intent"
+	"agent-gateway/internal/layer2"
 	"agent-gateway/internal/metrics"
 	"agent-gateway/internal/upstream"
 )
@@ -21,6 +22,7 @@ import (
 // Gateway composes the runtime dependencies of the HTTP API.
 type Gateway struct {
 	Classifier      *intent.Classifier
+	Layer2          *layer2.Router
 	Metrics         *metrics.Collector
 	Dashboard       bool
 	ClassifyTimeout time.Duration
@@ -88,8 +90,21 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 
 	layer := result.Intent.Layer()
 	content := ""
+	usage := result.Usage
 	if layer == 1 {
 		content = intent.QuickReply(result.Intent, last.Content)
+	} else if g.Layer2 != nil {
+		resp, err := g.Layer2.Chat(r.Context(), req.Model, layer2.ChatRequest{Messages: req.Messages})
+		if err != nil {
+			g.Logger.Warn("layer2 chat failed", "err", err)
+			writeError(w, http.StatusBadGateway, "upstream_error", "layer2_error", err.Error())
+			return
+		}
+		content = resp.Content
+		usage = resp.Usage
+		if usage.PromptTokens > 0 || usage.CompletionTokens > 0 {
+			g.Metrics.RecordTokens(usage.PromptTokens, usage.CompletionTokens, false)
+		}
 	}
 
 	id := newID()
@@ -101,7 +116,7 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 
 	ttft := time.Since(start)
 	g.recordRequest(id, result.Intent, layer, "ok", ttft, time.Since(start))
-	writeJSON(w, http.StatusOK, g.buildResponse(req.Model, id, created, content, result.Usage))
+	writeJSON(w, http.StatusOK, g.buildResponse(req.Model, id, created, content, usage))
 }
 
 // classifyTimeout is the budget for a full classify attempt, defaulting to 10s.

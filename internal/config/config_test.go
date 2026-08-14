@@ -107,3 +107,60 @@ func TestLoadMissingFiles(t *testing.T) {
 		t.Errorf("GRPCAddr = %q, want :9090", cfg.Server.GRPCAddr)
 	}
 }
+
+func TestLoadLayer2Defaults(t *testing.T) {
+	cfg, err := Load("", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Layer2.DefaultProvider != "opencode" {
+		t.Errorf("DefaultProvider = %q, want opencode", cfg.Layer2.DefaultProvider)
+	}
+	if cfg.Layer2.RequestTimeout.Duration != 60*time.Second {
+		t.Errorf("RequestTimeout = %v, want 60s", cfg.Layer2.RequestTimeout)
+	}
+	if cfg.Layer2.RetryAttempts != 1 {
+		t.Errorf("RetryAttempts = %d, want 1", cfg.Layer2.RetryAttempts)
+	}
+	p, ok := cfg.Layer2.Providers["opencode"]
+	if !ok {
+		t.Fatal("opencode provider missing from defaults")
+	}
+	if p.Type != "opencode" || p.BaseURL != "http://localhost:4096" {
+		t.Errorf("provider = %+v", p)
+	}
+}
+
+func TestLoadLayer2YAMLAndEnv(t *testing.T) {
+	t.Setenv("LAYER2_OPENCODE_MODEL", "opencode/deepseek-v4-flash-free")
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	content := `layer2:
+  default_provider: "custom"
+  request_timeout: 90s
+  providers:
+    opencode:
+      type: "opencode"
+      base_url: "http://oc:4096"
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Layer2.DefaultProvider != "custom" {
+		t.Errorf("DefaultProvider = %q, want custom", cfg.Layer2.DefaultProvider)
+	}
+	if cfg.Layer2.RequestTimeout.Duration != 90*time.Second {
+		t.Errorf("RequestTimeout = %v, want 90s", cfg.Layer2.RequestTimeout)
+	}
+	p := cfg.Layer2.Providers["opencode"]
+	if p.BaseURL != "http://oc:4096" {
+		t.Errorf("BaseURL = %q, want http://oc:4096 (from YAML)", p.BaseURL)
+	}
+	if p.Model != "opencode/deepseek-v4-flash-free" {
+		t.Errorf("Model = %q, want env override", p.Model)
+	}
+}

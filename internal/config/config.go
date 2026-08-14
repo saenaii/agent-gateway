@@ -34,6 +34,7 @@ func (d *Duration) UnmarshalYAML(node *yaml.Node) error {
 type Config struct {
 	Server         ServerConfig         `yaml:"server"`
 	Ollama         OllamaConfig         `yaml:"ollama"`
+	Layer2         Layer2Config         `yaml:"layer2"`
 	WorkerPool     WorkerPoolConfig     `yaml:"worker_pool"`
 	CircuitBreaker CircuitBreakerConfig `yaml:"circuit_breaker"`
 	Metrics        MetricsConfig        `yaml:"metrics"`
@@ -54,6 +55,22 @@ type OllamaConfig struct {
 	Model          string   `yaml:"model"`
 	RequestTimeout Duration `yaml:"request_timeout"`
 	RetryAttempts  int      `yaml:"retry_attempts"`
+}
+
+// Layer2Config configures the escalation path for complex intents.
+type Layer2Config struct {
+	DefaultProvider string                    `yaml:"default_provider"`
+	RequestTimeout  Duration                  `yaml:"request_timeout"`
+	RetryAttempts   int                       `yaml:"retry_attempts"`
+	Providers       map[string]ProviderConfig `yaml:"providers"`
+}
+
+// ProviderConfig describes one Layer 2 upstream backend. Type selects the
+// backend implementation (e.g. "opencode"; "openai" and "bedrock" planned).
+type ProviderConfig struct {
+	Type    string `yaml:"type"`
+	BaseURL string `yaml:"base_url"`
+	Model   string `yaml:"model"`
 }
 
 // WorkerPoolConfig sizes the classify job pool.
@@ -93,6 +110,17 @@ func defaults() *Config {
 			Model:          "qwen2.5:0.5b",
 			RequestTimeout: Duration{5 * time.Second},
 			RetryAttempts:  1,
+		},
+		Layer2: Layer2Config{
+			DefaultProvider: "opencode",
+			RequestTimeout:  Duration{60 * time.Second},
+			RetryAttempts:   1,
+			Providers: map[string]ProviderConfig{
+				"opencode": {
+					Type:    "opencode",
+					BaseURL: "http://localhost:4096",
+				},
+			},
 		},
 		WorkerPool: WorkerPoolConfig{Size: 16, QueueSize: 256},
 		CircuitBreaker: CircuitBreakerConfig{
@@ -183,6 +211,15 @@ func applyEnv(cfg *Config) {
 	cfg.Ollama.Model = envString("OLLAMA_MODEL", cfg.Ollama.Model)
 	cfg.Ollama.RequestTimeout = envDuration("OLLAMA_REQUEST_TIMEOUT", cfg.Ollama.RequestTimeout.Duration)
 	cfg.Ollama.RetryAttempts = envInt("OLLAMA_RETRY_ATTEMPTS", cfg.Ollama.RetryAttempts)
+
+	cfg.Layer2.DefaultProvider = envString("LAYER2_DEFAULT_PROVIDER", cfg.Layer2.DefaultProvider)
+	cfg.Layer2.RequestTimeout = envDuration("LAYER2_REQUEST_TIMEOUT", cfg.Layer2.RequestTimeout.Duration)
+	cfg.Layer2.RetryAttempts = envInt("LAYER2_RETRY_ATTEMPTS", cfg.Layer2.RetryAttempts)
+	if p, ok := cfg.Layer2.Providers["opencode"]; ok {
+		p.BaseURL = envString("LAYER2_OPENCODE_BASE_URL", p.BaseURL)
+		p.Model = envString("LAYER2_OPENCODE_MODEL", p.Model)
+		cfg.Layer2.Providers["opencode"] = p
+	}
 }
 
 func envString(key, fallback string) string {
